@@ -5,15 +5,21 @@ import matplotlib.pyplot as plt
 
 # Load a pre-trained model and tokenizer
 model_name = "gpt2"
+# Loads the GPT-2 model from Hugging Face's pre-trained models.
 model = AutoModelForCausalLM.from_pretrained(model_name, output_hidden_states=True)
+# Loads the tokenizer for GPT-2. The tokenizer will: 
+# Break input texts into smaller pieces and convert those 
+    # into numerical IDs.
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 # Example input data
 input_text = "AI is transforming healthcare."
+#Tokenizes the input into a format the model can understand.
 inputs = tokenizer(input_text, return_tensors="pt")
 
 
 # Forward pass to get model outputs
+# Passes the tokenized input through the model to get its outputs
 outputs = model(**inputs, output_hidden_states=True, return_dict=True)
 
 # Extract hidden states
