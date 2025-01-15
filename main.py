@@ -1,6 +1,8 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch 
 import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.cluster import KMeans
 
 
 # Load a pre-trained model and tokenizer
@@ -63,8 +65,44 @@ for sentence in sentences:
 
 # VISUALIZE NEURON ACTIVATIONS
 # Plot the activations for a specific token
-plt.bar(range(10), strongest_neurons.values.detach().numpy())
+""" plt.bar(range(10), strongest_neurons.values.detach().numpy())
 plt.xlabel("Neuron Index (Top 10)")
 plt.ylabel("Activation Value")
 plt.title(f"Top 10 Neuron Activations for Token at Index {token_index}")
-plt.show()
+plt.show() """
+
+
+
+# CLUSTERING TOPICS
+# Define topic-specific sentences
+sentences = [
+    "Doctors use AI to diagnose diseases.",  # Health
+    "AI is revolutionizing the medical field.",  # Mixed
+    "AI algorithms are advancing rapidly."  # Technology
+]
+
+# Collect activations
+all_activations = []
+
+for sentence in sentences:
+    inputs = tokenizer(sentence, return_tensors="pt")
+    outputs = model(**inputs, output_hidden_states=True, return_dict=True)
+    last_layer_activations = outputs.hidden_states[-1]  # Last hidden layer
+
+    # Average activations across all tokens in the sentence
+    avg_activations = last_layer_activations.mean(dim=1)  # Shape: [1, hidden_size]
+    all_activations.append(avg_activations.detach().numpy().squeeze())
+
+# Convert to a matrix (rows: sentences, columns: neurons)
+activation_matrix = np.stack(all_activations)
+print("Activation Matrix Shape:", activation_matrix.shape)
+
+
+# CLUSTER NEURONS BY ACTIVATION PATTERNS
+# Apply k-means clustering to neurons
+num_clusters = 3  # Example: Health, Tech, Mixed
+kmeans = KMeans(n_clusters=num_clusters, random_state=0)
+neuron_clusters = kmeans.fit_predict(activation_matrix.T)  # Cluster neurons
+
+# Print cluster assignments
+print("Neuron Cluster Assignments:", neuron_clusters)
