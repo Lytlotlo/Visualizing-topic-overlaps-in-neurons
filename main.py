@@ -97,13 +97,15 @@ for layer_idx, activations in enumerate(reduced_activations):
     for neuron_idx in range(num_neurons):
         node_id = f"L{layer_idx}_N{neuron_idx}"
         G.add_node(node_id)
-        positions[node_id] = (layer_idx, -neuron_idx * 2)  # Add spacing between neurons
+         # Add spacing between neurons
+        positions[node_id] = (layer_idx, -neuron_idx * 2) 
 
         # Assign colors and labels
         if layer_idx == 0:  # Input layer
             node_colors.append(token_colors[neuron_idx % len(token_colors)])
             node_labels.append(clean_tokens[neuron_idx % len(clean_tokens)])
-        else:  # Hidden layers
+        # Hidden layers
+        else: 
             topic = list(topic_keywords.keys())[neuron_idx % len(topic_keywords)]  # Assign topics cyclically
             color = topic_colors[topic]
             activation_value = activations[:, neuron_idx].mean()
@@ -137,7 +139,7 @@ edge_weights = [data["weight"] if "weight" in data else 0 for _, _, data in edge
 max_weight = max(edge_weights) if edge_weights else 1
 edge_widths = [2 + (weight / max_weight) * 8 for weight in edge_weights]
 
-# Plot graph with explicit Axes
+# Plot graph with Axes
 fig, ax = plt.subplots(figsize=(14, 10))
 nx.draw(
     G, pos=positions,
