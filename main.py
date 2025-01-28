@@ -4,6 +4,10 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+import os
+
+# Ensure the 'static' folder exists
+os.makedirs("static", exist_ok=True)
 
 # Load a pre-trained model and tokenizer
 model_name = "gpt2"
@@ -97,15 +101,13 @@ for layer_idx, activations in enumerate(reduced_activations):
     for neuron_idx in range(num_neurons):
         node_id = f"L{layer_idx}_N{neuron_idx}"
         G.add_node(node_id)
-         # Add spacing between neurons
-        positions[node_id] = (layer_idx, -neuron_idx * 2) 
+        positions[node_id] = (layer_idx, -neuron_idx * 2)  # Add spacing between neurons
 
         # Assign colors and labels
         if layer_idx == 0:  # Input layer
             node_colors.append(token_colors[neuron_idx % len(token_colors)])
             node_labels.append(clean_tokens[neuron_idx % len(clean_tokens)])
-        # Hidden layers
-        else: 
+        else:  # Hidden layers
             topic = list(topic_keywords.keys())[neuron_idx % len(topic_keywords)]  # Assign topics cyclically
             color = topic_colors[topic]
             activation_value = activations[:, neuron_idx].mean()
@@ -167,5 +169,9 @@ legend_handles.append(plt.scatter([], [], color="#FF99CC", label="Output Layer")
 ax.legend(handles=legend_handles, loc="upper right", fontsize=10)
 
 ax.set_title("Neural Network Visualization with Cooperation Highlighting (5 Hidden Layers)")
-plt.show()
 
+# Save the plot to static folder
+output_path = "static/graph.png"
+fig.savefig(output_path, format="png", bbox_inches="tight")
+print(f"Graph saved to {output_path}")
+plt.close(fig)
