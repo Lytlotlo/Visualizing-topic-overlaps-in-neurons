@@ -3,7 +3,7 @@ body {
     font-family: 'Lora', serif;
     font-weight: 400;
     line-height: 1.8;
-    background-color: #fdf6e3; /* Paper book color */
+    background-color: white;
     color: #333;
     margin: 0;
     padding: 0;
@@ -14,14 +14,15 @@ header {
     text-align: center;
     padding: 40px 20px;
     border-bottom: 1px solid #ddd;
+    background-color: rgb(251, 251, 255);
 }
 
 header h1 {
-    font-family: 'Public Sans', sans-serif;
+    font-family: 'Roboto', sans-serif;
     font-size: 2.5rem;
     font-weight: 700;
     margin-bottom: 10px;
-    color: #444;
+    color: #333;
 }
 
 header p {
@@ -31,7 +32,7 @@ header p {
 
 /* Typography */
 h1, h2, h3 {
-    font-family: 'Public Sans', sans-serif;
+    font-family: 'Roboto', sans-serif;
     font-weight: 700;
     color: #444;
     margin-top: 2rem;
@@ -77,6 +78,15 @@ a:hover {
     text-decoration: underline;
 }
 
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin-bottom: 20px;
+    border-radius: 10px; 
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); 
+}
+
 /* Footer */
 footer {
     text-align: center;
@@ -85,6 +95,7 @@ footer {
     border-top: 1px solid #ddd;
     padding: 20px 0;
     margin-top: 40px;
+    background-color: rgb(251, 251, 255);
 }
 
 
