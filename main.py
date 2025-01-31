@@ -80,16 +80,18 @@ for i, layer in enumerate(reduced_hidden_states):
         reduced_activations.append(layer[:, :final_hidden_neurons])
 
 # Create a separate input layer for token embeddings
-# Shape: [sequence_length, hidden_dim]. We slice to match the actual token count.
 input_layer_activations = model.transformer.wte(inputs["input_ids"]).detach().squeeze(0).numpy()
 num_actual_tokens = len(clean_tokens)
 input_layer_activations = input_layer_activations[:num_actual_tokens, :]
 
-# Neural network visualization setup
+# ----------------------------------------------------
+# Build a DiGraph and store node positions, colors, labels, AND activation values
+# ----------------------------------------------------
 G = nx.DiGraph()
 positions = {}
-node_colors = []
-node_labels = []
+node_labels_map = {}
+node_colors_map = {}
+node_activations = {}  # Store each node's activation for highlight logic
 
 # Topic colors
 topic_colors = {
@@ -103,15 +105,21 @@ token_colors = ["#99FF99", "#FFCC99", "#FF9999", "#99CCFF", "#FF99CC"]
 while len(token_colors) < len(clean_tokens):
     token_colors.extend(token_colors[: len(clean_tokens) - len(token_colors)])
 
-# 1) Add INPUT layer nodes (tokens) -- now the length matches clean_tokens
+# 1) INPUT layer nodes (L0)
 for neuron_idx in range(num_actual_tokens):
     node_id = f"L0_N{neuron_idx}"
     G.add_node(node_id)
     positions[node_id] = (0, -neuron_idx * 2)
-    node_colors.append(token_colors[neuron_idx % len(token_colors)])
-    node_labels.append(clean_tokens[neuron_idx])
 
-# 2) Add the 5 hidden layers
+    # For input nodes, we can define activation=0 or compute if you prefer.
+    activation_value = 0.0
+
+    node_activations[node_id] = activation_value
+    node_colors_map[node_id] = token_colors[neuron_idx % len(token_colors)]
+    node_labels_map[node_id] = clean_tokens[neuron_idx]
+
+# 2) Hidden layers (L1..L5)
+layer_count = len(reduced_activations)
 for layer_idx, activations in enumerate(reduced_activations, start=1):
     num_neurons = activations.shape[1]
     for neuron_idx in range(num_neurons):
@@ -123,90 +131,149 @@ for layer_idx, activations in enumerate(reduced_activations, start=1):
         topic = list(topic_colors.keys())[neuron_idx % len(topic_colors)]
         color = topic_colors[topic]
         activation_value = activations[:, neuron_idx].mean()
-        node_colors.append(color)
-        node_labels.append(f"{topic}\nActivation: {activation_value:.2f}")
 
-# 3) Add OUTPUT layer node (L6_N0)
-output_node_id = f"L{len(reduced_activations)+1}_N0"
+        node_activations[node_id] = activation_value
+        node_colors_map[node_id] = color
+        node_labels_map[node_id] = f"{topic}\nActivation: {activation_value:.2f}"
+
+# 3) OUTPUT layer node (L6_N0)
+output_node_id = f"L{layer_count + 1}_N0"
 G.add_node(output_node_id)
-positions[output_node_id] = (len(reduced_activations) + 1, 0)
-node_colors.append("#FF99CC")
-node_labels.append(f"Prediction:\n{predicted_category}")
+positions[output_node_id] = (layer_count + 1, 0)
 
-# 4) Create edges
+node_activations[output_node_id] = 0.0
+node_colors_map[output_node_id] = "#FF99CC"
+node_labels_map[output_node_id] = f"Prediction:\n{predicted_category}"
+
+# 4) Edges
 def compute_cooperation_strength(layerA, layerB, src_idx, dst_idx):
     return float(np.sum(layerA[:, src_idx] * layerB[:, dst_idx]))
 
 cooperation_threshold = 0.2
 input_cooperation_threshold = 0.0
 
-# 4a) INPUT -> first hidden layer
-first_hidden = reduced_activations[0]
-for src_idx in range(num_actual_tokens):
-    for dst_idx in range(first_hidden.shape[1]):
-        strength = compute_cooperation_strength(input_layer_activations, first_hidden, src_idx, dst_idx)
-        if strength > input_cooperation_threshold:
-            G.add_edge(f"L0_N{src_idx}", f"L1_N{dst_idx}", weight=strength)
+# INPUT -> first hidden
+if layer_count > 0:
+    first_hidden = reduced_activations[0]
+    for src_idx in range(num_actual_tokens):
+        for dst_idx in range(first_hidden.shape[1]):
+            strength = compute_cooperation_strength(input_layer_activations, first_hidden, src_idx, dst_idx)
+            if strength > input_cooperation_threshold:
+                G.add_edge(f"L0_N{src_idx}", f"L1_N{dst_idx}", weight=strength)
 
-# 4b) Hidden layer -> hidden layer
-for layer_idx in range(len(reduced_activations) - 1):
-    layerA = reduced_activations[layer_idx]
-    layerB = reduced_activations[layer_idx + 1]
+# Hidden -> hidden
+for i in range(layer_count - 1):
+    layerA = reduced_activations[i]
+    layerB = reduced_activations[i + 1]
     for src_idx in range(layerA.shape[1]):
         for dst_idx in range(layerB.shape[1]):
             strength = compute_cooperation_strength(layerA, layerB, src_idx, dst_idx)
             if strength > cooperation_threshold:
-                G.add_edge(f"L{layer_idx+1}_N{src_idx}", f"L{layer_idx+2}_N{dst_idx}", weight=strength)
+                G.add_edge(f"L{i+1}_N{src_idx}", f"L{i+2}_N{dst_idx}", weight=strength)
 
-# 4c) Last hidden -> OUTPUT
-last_hidden = reduced_activations[-1]
-for src_idx in range(last_hidden.shape[1]):
-    strength = float(np.sum(last_hidden[:, src_idx]))
-    if abs(strength) > 0.0:
-        G.add_edge(f"L{len(reduced_activations)}_N{src_idx}", output_node_id, weight=strength)
+# Last hidden -> OUTPUT
+if layer_count > 0:
+    last_hidden = reduced_activations[-1]
+    for src_idx in range(last_hidden.shape[1]):
+        strength = float(np.sum(last_hidden[:, src_idx]))
+        if abs(strength) > 0.0:
+            G.add_edge(f"L{layer_count}_N{src_idx}", output_node_id, weight=strength)
 
-# 5) Plot (increased figure size)
+# ----------------------------------------------------
+# 5) Visualization with "glow" for high activation
+# ----------------------------------------------------
 fig, ax = plt.subplots(figsize=(18, 12))
 
+# Edges
 edges = G.edges(data=True)
 edge_weights = [data["weight"] if "weight" in data else 0 for _, _, data in edges]
 max_weight = max(edge_weights) if edge_weights else 1
 edge_widths = [2 + (w / max_weight) * 8 for w in edge_weights]
 
-nx.draw(
+# Draw edges first (so nodes appear on top)
+nx.draw_networkx_edges(
     G,
     pos=positions,
-    with_labels=True,
-    labels=dict(zip(G.nodes(), node_labels)),
-    node_color=node_colors,
-    node_size=600,
+    width=edge_widths,
     edge_color=edge_weights,
     edge_cmap=plt.cm.Blues,
-    width=edge_widths,
     alpha=0.8,
     connectionstyle="arc3,rad=0.2",
     ax=ax
 )
 
-# Colorbar
+# Node labels (text)
+nx.draw_networkx_labels(
+    G,
+    pos=positions,
+    labels=node_labels_map,
+    font_size=8,
+    ax=ax
+)
+
+# ----------------------------------------------------
+# Highlight pass: draw "glow" behind nodes with high activation
+# ----------------------------------------------------
+all_activation_values = np.array(list(node_activations.values()))
+max_activation = float(all_activation_values.max()) if len(all_activation_values) > 0 else 1.0
+highlight_threshold = 0.7 * max_activation  # highlight nodes above 70% of the max activation
+glow_size_factor = 2000  # bigger size => bigger glow
+
+for node_id in G.nodes():
+    act_val = node_activations[node_id]
+    if act_val >= highlight_threshold and max_activation > 0.0:
+        # We'll draw a bigger scatter behind the node, with a bright color + alpha
+        (x, y) = positions[node_id]
+        # A single scatter point with large 's' and partial transparency
+        plt.scatter(
+            x, y,
+            s=glow_size_factor,       # the "glow" size
+            color="#FFFF99",          # a bright yellowish color
+            alpha=0.4,                # semi-transparent
+            zorder=1                  # put behind normal nodes
+        )
+
+# ----------------------------------------------------
+# Normal node draw on top
+# We'll convert node_colors_map to a list in the same order as G.nodes()
+# ----------------------------------------------------
+nodes_in_order = list(G.nodes())
+node_color_list = [node_colors_map[n] for n in nodes_in_order]
+
+# By default, networkx will re-draw edges if we call nx.draw_networkx_nodes
+# so we specify `edgelist=[]` or separate calls.
+nx.draw_networkx_nodes(
+    G,
+    pos=positions,
+    node_color=node_color_list,
+    node_size=600,
+    ax=ax
+)
+
+# ----------------------------------------------------
+# Colorbar for edges
+# ----------------------------------------------------
 sm = plt.cm.ScalarMappable(cmap=plt.cm.Blues, norm=plt.Normalize(vmin=0, vmax=max_weight))
-sm.set_array([])
+sm.set_array([])  
 cbar = fig.colorbar(sm, ax=ax)
 cbar.set_label("Cooperation Strength")
 
+# ----------------------------------------------------
 # Legend
-legend_handles = [
-    plt.scatter([], [], color=color, label=topic)
-    for topic, color in topic_colors.items()
-]
+# ----------------------------------------------------
+legend_handles = []
+# Topics
+for topic, color in topic_colors.items():
+    legend_handles.append(plt.scatter([], [], color=color, label=topic))
+# Output
 legend_handles.append(plt.scatter([], [], color="#FF99CC", label="Output Layer"))
 ax.legend(handles=legend_handles, loc="upper left", fontsize=10)
 
-ax.set_title("Neural Network Visualization with Cooperation Highlighting (5 Hidden Layers)")
+ax.set_title("Neural Network Visualization with Highlighted High-Activation Neurons (5 Hidden Layers)")
+ax.axis("off")  # Hide the axis lines for a cleaner look
 
 # Save the plot
 output_path = "static/graph.png"
 fig.savefig(output_path, format="png", bbox_inches="tight")
 print(f"Graph saved to {output_path}")
 plt.close(fig)
-
