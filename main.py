@@ -1,279 +1,228 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import os
 import torch
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-import os
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Ensure the 'static' folder exists
+# Make sure 'static' exists for saving the final plot
 os.makedirs("static", exist_ok=True)
 
-# Load a pre-trained model and tokenizer
+# Load pretrained GPT-2 model and tokenizer
 model_name = "gpt2"
 model = AutoModelForCausalLM.from_pretrained(model_name, output_hidden_states=True)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-# Define the input sentence
-input_sentence = "software will change the way you work"
-inputs = tokenizer(input_sentence, return_tensors="pt")
-tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"].squeeze())
-clean_tokens = [token.replace("Ġ", "") for token in tokens]  # Remove "Ġ" prefix
+# Example input sentence
+input_text = "software will change the way you work"
+input_ids = tokenizer(input_text, return_tensors="pt")
+token_list = tokenizer.convert_ids_to_tokens(input_ids["input_ids"].squeeze())
 
-# Forward pass to get model outputs
-outputs = model(**inputs, output_hidden_states=True, return_dict=True)
-hidden_states = outputs.hidden_states  # Tuple of tensors for each layer
+# Remove the special GPT-2 prefix from tokens
+processed_tokens = [tok.replace("Ġ", "") for tok in token_list]
 
-# Define topic keywords for semantic similarity
-topic_keywords = {
+# Forward pass to extract hidden states
+model_outputs = model(**input_ids, return_dict=True, output_hidden_states=True)
+states = model_outputs.hidden_states  # tuple of hidden state tensors
+
+# Define semantic categories for topic detection
+semantic_categories = {
     "Health": "health care, wellness, fitness, medical treatment",
     "Technology": "AI, computers, software, automation, innovation, digital systems",
     "Mixed": "general topics, random discussions, miscellaneous, neutral content",
 }
 
-# Get embeddings for the sentence and keywords
-sentence_embedding = model.transformer.wte(inputs["input_ids"]).mean(dim=1).detach().numpy()
-keyword_embeddings = {
-    topic: model.transformer.wte(tokenizer(topic, return_tensors="pt")["input_ids"]).mean(dim=1).detach().numpy()
-    for topic in topic_keywords
+# Compute an embedding for the input text
+text_embedding = model.transformer.wte(input_ids["input_ids"]).mean(dim=1).detach().numpy()
+
+# Compute average embeddings for each category
+cat_embeddings = {}
+for label, desc in semantic_categories.items():
+    cat_input = tokenizer(desc, return_tensors="pt")["input_ids"]
+    cat_embed = model.transformer.wte(cat_input).mean(dim=1).detach().numpy()
+    cat_embeddings[label] = cat_embed
+
+# Measure similarity between text and each category
+raw_similarities = {}
+for label, embed in cat_embeddings.items():
+    raw_similarities[label] = cosine_similarity(text_embedding, embed)[0, 0]
+
+# If certain keywords appear, add weighting to that category’s similarity
+input_lower = input_text.lower()
+boosts = {
+    "Health": 1.0 + 0.5 * any(k in input_lower for k in ["health", "care", "medical", "fitness"]),
+    "Technology": 1.0 + 0.5 * any(k in input_lower for k in ["ai", "software", "automation", "digital"]),
+    "Mixed": 1.0
 }
+weighted_similarities = {k: raw_similarities[k] * boosts[k] for k in raw_similarities}
 
-# Compute similarities
-similarities = {
-    topic: cosine_similarity(sentence_embedding, embedding)[0, 0]
-    for topic, embedding in keyword_embeddings.items()
-}
+# Choose the category with the highest similarity
+topic_assigned = max(weighted_similarities, key=weighted_similarities.get)
 
-# Adjust similarities based on keyword occurrences
-sentence_lower = input_sentence.lower()
-weights = {
-    "Health": 1.0 + 0.5 * any(word in sentence_lower for word in ["health", "care", "medical", "fitness"]),
-    "Technology": 1.0 + 0.5 * any(word in sentence_lower for word in ["ai", "software", "automation", "digital"]),
-    "Mixed": 1.0,
-}
-adjusted_similarities = {
-    topic: score * weights[topic]
-    for topic, score in similarities.items()
-}
+# Decide which hidden layers to visualize (picking 5 out of the total)
+num_layers = len(states) - 2  # skip input & final output layers
+layer_indices = np.linspace(0, num_layers - 1, 5, dtype=int)
 
-# Assign topic based on highest similarity
-predicted_category = max(adjusted_similarities, key=adjusted_similarities.get)
+# Extract the chosen layers (remove batch dimension)
+chosen_layers = [states[idx + 1].detach().squeeze(0).numpy() for idx in layer_indices]
 
-# Dynamically select 5 hidden layers (instead of 4)
-total_hidden_layers = len(hidden_states) - 2  # Exclude input & final output layers from GPT-2
-selected_layers = np.linspace(0, total_hidden_layers - 1, 5, dtype=int)  # Choose 5 evenly spaced layers
-
-# Collect embeddings for those 5 layers
-reduced_hidden_states = [hidden_states[i + 1].detach().squeeze(0).numpy() for i in selected_layers]
-
-# Define neurons per layer with at least 3 neurons in the final hidden layer
-max_neurons_per_layer = 12
-final_hidden_neurons = 3
-
-reduced_activations = []
-for i, layer in enumerate(reduced_hidden_states):
-    if i < len(reduced_hidden_states) - 1:
-        # Limit hidden layers to max_neurons_per_layer
-        reduced_activations.append(layer[:, :max_neurons_per_layer])
+# Limit neurons displayed
+max_neurons = 12
+final_neurons = 3
+activation_slices = []
+for i, layer_array in enumerate(chosen_layers):
+    if i < len(chosen_layers) - 1:
+        activation_slices.append(layer_array[:, :max_neurons])
     else:
-        # Final hidden layer to final_hidden_neurons
-        reduced_activations.append(layer[:, :final_hidden_neurons])
+        activation_slices.append(layer_array[:, :final_neurons])
 
-# Create a separate input layer for token embeddings
-input_layer_activations = model.transformer.wte(inputs["input_ids"]).detach().squeeze(0).numpy()
-num_actual_tokens = len(clean_tokens)
-input_layer_activations = input_layer_activations[:num_actual_tokens, :]
+# Also keep track of token embeddings for the input layer
+input_embeds = model.transformer.wte(input_ids["input_ids"]).detach().squeeze(0).numpy()
+num_tokens = len(processed_tokens)
+input_embeds = input_embeds[:num_tokens, :]
 
-# ----------------------------------------------------
-# Build a DiGraph and store node positions, colors, labels, AND activation values
-# ----------------------------------------------------
+# Build the network graph
 G = nx.DiGraph()
 positions = {}
-node_labels_map = {}
-node_colors_map = {}
-node_activations = {}  # Store each node's activation for highlight logic
+node_labels = {}
+node_colors = {}
+node_activ_values = {}
 
-# Topic colors
-topic_colors = {
+# Assign colors for categories
+category_colors = {
     "Health": "#FF6666",
     "Technology": "#6699FF",
     "Mixed": "#FFFF66",
 }
 
-# Token colors
-token_colors = ["#99FF99", "#FFCC99", "#FF9999", "#99CCFF", "#FF99CC"]
-while len(token_colors) < len(clean_tokens):
-    token_colors.extend(token_colors[: len(clean_tokens) - len(token_colors)])
+# Colors for input tokens
+token_palette = ["#99FF99", "#FFCC99", "#FF9999", "#99CCFF", "#FF99CC"]
+while len(token_palette) < len(processed_tokens):
+    token_palette.extend(token_palette[: len(processed_tokens) - len(token_palette)])
 
-# 1) INPUT layer nodes (L0)
-for neuron_idx in range(num_actual_tokens):
-    node_id = f"L0_N{neuron_idx}"
+# 1) Input layer
+for i in range(num_tokens):
+    node_id = f"Input_{i}"
     G.add_node(node_id)
-    positions[node_id] = (0, -neuron_idx * 2)
+    positions[node_id] = (0, -2 * i)
+    node_activ_values[node_id] = 0.0
+    node_colors[node_id] = token_palette[i % len(token_palette)]
+    node_labels[node_id] = processed_tokens[i]
 
-    # For input nodes, we can define activation=0 or compute if you prefer.
-    activation_value = 0.0
-
-    node_activations[node_id] = activation_value
-    node_colors_map[node_id] = token_colors[neuron_idx % len(token_colors)]
-    node_labels_map[node_id] = clean_tokens[neuron_idx]
-
-# 2) Hidden layers (L1..L5)
-layer_count = len(reduced_activations)
-for layer_idx, activations in enumerate(reduced_activations, start=1):
-    num_neurons = activations.shape[1]
-    for neuron_idx in range(num_neurons):
-        node_id = f"L{layer_idx}_N{neuron_idx}"
+# 2) Hidden layers
+layer_count = len(activation_slices)
+for layer_idx, layer_data in enumerate(activation_slices, start=1):
+    neuron_count = layer_data.shape[1]
+    for n_idx in range(neuron_count):
+        node_id = f"L{layer_idx}_N{n_idx}"
         G.add_node(node_id)
-        positions[node_id] = (layer_idx, -neuron_idx * 2)
+        positions[node_id] = (layer_idx, -2 * n_idx)
 
-        # Assign color/label
-        topic = list(topic_colors.keys())[neuron_idx % len(topic_colors)]
-        color = topic_colors[topic]
-        activation_value = activations[:, neuron_idx].mean()
+        # Assign a color by category index
+        cat_list = list(category_colors.keys())
+        cat_label = cat_list[n_idx % len(cat_list)]
+        node_colors[node_id] = category_colors[cat_label]
 
-        node_activations[node_id] = activation_value
-        node_colors_map[node_id] = color
-        node_labels_map[node_id] = f"{topic}\nActivation: {activation_value:.2f}"
+        # Mean activation of all tokens in this neuron
+        activation_val = layer_data[:, n_idx].mean()
+        node_activ_values[node_id] = float(activation_val)
+        node_labels[node_id] = f"{cat_label}\nAct: {activation_val:.2f}"
 
-# 3) OUTPUT layer node (L6_N0)
-output_node_id = f"L{layer_count + 1}_N0"
-G.add_node(output_node_id)
-positions[output_node_id] = (layer_count + 1, 0)
+# 3) Output node
+final_node_id = f"L{layer_count + 1}_Out"
+G.add_node(final_node_id)
+positions[final_node_id] = (layer_count + 1, 0)
+node_activ_values[final_node_id] = 0.0
+node_colors[final_node_id] = "#FF99CC"
+node_labels[final_node_id] = f"Prediction:\n{topic_assigned}"
 
-node_activations[output_node_id] = 0.0
-node_colors_map[output_node_id] = "#FF99CC"
-node_labels_map[output_node_id] = f"Prediction:\n{predicted_category}"
+# Function to measure overlap between two sets of activations
+def cooperation_strength(matA, matB, idxA, idxB):
+    return float(np.sum(matA[:, idxA] * matB[:, idxB]))
 
-# 4) Edges
-def compute_cooperation_strength(layerA, layerB, src_idx, dst_idx):
-    return float(np.sum(layerA[:, src_idx] * layerB[:, dst_idx]))
+threshold = 0.2
+input_threshold = 0.0
 
-cooperation_threshold = 0.2
-input_cooperation_threshold = 0.0
-
-# INPUT -> first hidden
+# Edges: input -> first hidden
 if layer_count > 0:
-    first_hidden = reduced_activations[0]
-    for src_idx in range(num_actual_tokens):
-        for dst_idx in range(first_hidden.shape[1]):
-            strength = compute_cooperation_strength(input_layer_activations, first_hidden, src_idx, dst_idx)
-            if strength > input_cooperation_threshold:
-                G.add_edge(f"L0_N{src_idx}", f"L1_N{dst_idx}", weight=strength)
+    first_layer = activation_slices[0]
+    for src_i in range(num_tokens):
+        for dst_j in range(first_layer.shape[1]):
+            strength_val = cooperation_strength(input_embeds, first_layer, src_i, dst_j)
+            if strength_val > input_threshold:
+                G.add_edge(f"Input_{src_i}", f"L1_N{dst_j}", weight=strength_val)
 
-# Hidden -> hidden
-for i in range(layer_count - 1):
-    layerA = reduced_activations[i]
-    layerB = reduced_activations[i + 1]
-    for src_idx in range(layerA.shape[1]):
-        for dst_idx in range(layerB.shape[1]):
-            strength = compute_cooperation_strength(layerA, layerB, src_idx, dst_idx)
-            if strength > cooperation_threshold:
-                G.add_edge(f"L{i+1}_N{src_idx}", f"L{i+2}_N{dst_idx}", weight=strength)
+# Edges: hidden -> hidden
+for l_idx in range(layer_count - 1):
+    A = activation_slices[l_idx]
+    B = activation_slices[l_idx + 1]
+    for src_i in range(A.shape[1]):
+        for dst_j in range(B.shape[1]):
+            strength_val = cooperation_strength(A, B, src_i, dst_j)
+            if strength_val > threshold:
+                G.add_edge(f"L{l_idx+1}_N{src_i}", f"L{l_idx+2}_N{dst_j}", weight=strength_val)
 
-# Last hidden -> OUTPUT
+# Edges: last hidden -> output
 if layer_count > 0:
-    last_hidden = reduced_activations[-1]
-    for src_idx in range(last_hidden.shape[1]):
-        strength = float(np.sum(last_hidden[:, src_idx]))
-        if abs(strength) > 0.0:
-            G.add_edge(f"L{layer_count}_N{src_idx}", output_node_id, weight=strength)
+    last_layer = activation_slices[-1]
+    for src_i in range(last_layer.shape[1]):
+        edge_strength = float(np.sum(last_layer[:, src_i]))
+        if abs(edge_strength) > 0.0:
+            G.add_edge(f"L{layer_count}_N{src_i}", final_node_id, weight=edge_strength)
 
-# ----------------------------------------------------
-# 5) Visualization with "glow" for high activation
-# ----------------------------------------------------
+# Plotting
 fig, ax = plt.subplots(figsize=(18, 12))
 
-# Edges
+# Extract edge data for thickness/color mapping
 edges = G.edges(data=True)
-edge_weights = [data["weight"] if "weight" in data else 0 for _, _, data in edges]
-max_weight = max(edge_weights) if edge_weights else 1
-edge_widths = [2 + (w / max_weight) * 8 for w in edge_weights]
+edge_vals = [e[2]["weight"] if "weight" in e[2] else 0 for e in edges]
+max_val = max(edge_vals) if edge_vals else 1
+widths = [2 + (val / max_val) * 8 for val in edge_vals]
 
-# Draw edges first (so nodes appear on top)
 nx.draw_networkx_edges(
-    G,
-    pos=positions,
-    width=edge_widths,
-    edge_color=edge_weights,
-    edge_cmap=plt.cm.Blues,
-    alpha=0.8,
-    connectionstyle="arc3,rad=0.2",
-    ax=ax
+    G, pos=positions, width=widths, edge_color=edge_vals,
+    edge_cmap=plt.cm.Blues, alpha=0.8,
+    connectionstyle="arc3,rad=0.2", ax=ax
 )
 
-# Node labels (text)
-nx.draw_networkx_labels(
-    G,
-    pos=positions,
-    labels=node_labels_map,
-    font_size=8,
-    ax=ax
-)
+nx.draw_networkx_labels(G, pos=positions, labels=node_labels, font_size=8, ax=ax)
 
-# ----------------------------------------------------
-# Highlight pass: draw "glow" behind nodes with high activation
-# ----------------------------------------------------
-all_activation_values = np.array(list(node_activations.values()))
-max_activation = float(all_activation_values.max()) if len(all_activation_values) > 0 else 1.0
-highlight_threshold = 0.7 * max_activation  # highlight nodes above 70% of the max activation
-glow_size_factor = 2000  # bigger size => bigger glow
+# Highlight nodes with high activation by drawing a large translucent circle behind them
+node_values = np.array(list(node_activ_values.values()))
+peak_activation = float(node_values.max()) if len(node_values) > 0 else 1.0
+highlight_cutoff = 0.7 * peak_activation
+glow_size = 2000
 
-for node_id in G.nodes():
-    act_val = node_activations[node_id]
-    if act_val >= highlight_threshold and max_activation > 0.0:
-        # We'll draw a bigger scatter behind the node, with a bright color + alpha
-        (x, y) = positions[node_id]
-        # A single scatter point with large 's' and partial transparency
-        plt.scatter(
-            x, y,
-            s=glow_size_factor,       # the "glow" size
-            color="#FFFF99",          # a bright yellowish color
-            alpha=0.4,                # semi-transparent
-            zorder=1                  # put behind normal nodes
-        )
+for nid in G.nodes():
+    val = node_activ_values[nid]
+    if val >= highlight_cutoff and peak_activation > 0:
+        x_pos, y_pos = positions[nid]
+        plt.scatter(x_pos, y_pos, s=glow_size, color="#FFFF99", alpha=0.4, zorder=1)
 
-# ----------------------------------------------------
-# Normal node draw on top
-# We'll convert node_colors_map to a list in the same order as G.nodes()
-# ----------------------------------------------------
-nodes_in_order = list(G.nodes())
-node_color_list = [node_colors_map[n] for n in nodes_in_order]
+# Draw the nodes on top
+node_order = list(G.nodes())
+color_list = [node_colors[n] for n in node_order]
+nx.draw_networkx_nodes(G, pos=positions, node_color=color_list, node_size=600, ax=ax)
 
-# By default, networkx will re-draw edges if we call nx.draw_networkx_nodes
-# so we specify `edgelist=[]` or separate calls.
-nx.draw_networkx_nodes(
-    G,
-    pos=positions,
-    node_color=node_color_list,
-    node_size=600,
-    ax=ax
-)
+# Add colorbar for edges
+sm = plt.cm.ScalarMappable(cmap=plt.cm.Blues, norm=plt.Normalize(vmin=0, vmax=max_val))
+sm.set_array([])
+cb = fig.colorbar(sm, ax=ax)
+cb.set_label("Cooperation Strength")
 
-# ----------------------------------------------------
-# Colorbar for edges
-# ----------------------------------------------------
-sm = plt.cm.ScalarMappable(cmap=plt.cm.Blues, norm=plt.Normalize(vmin=0, vmax=max_weight))
-sm.set_array([])  
-cbar = fig.colorbar(sm, ax=ax)
-cbar.set_label("Cooperation Strength")
-
-# ----------------------------------------------------
 # Legend
-# ----------------------------------------------------
-legend_handles = []
-# Topics
-for topic, color in topic_colors.items():
-    legend_handles.append(plt.scatter([], [], color=color, label=topic))
-# Output
-legend_handles.append(plt.scatter([], [], color="#FF99CC", label="Output Layer"))
-ax.legend(handles=legend_handles, loc="upper left", fontsize=10)
+legend_items = []
+for lbl, clr in category_colors.items():
+    legend_items.append(plt.scatter([], [], color=clr, label=lbl))
+legend_items.append(plt.scatter([], [], color="#FF99CC", label="Output Layer"))
+ax.legend(handles=legend_items, loc="upper left", fontsize=10)
 
-ax.set_title("Neural Network Visualization with Highlighted High-Activation Neurons (5 Hidden Layers)")
-ax.axis("off")  # Hide the axis lines for a cleaner look
+ax.set_title("Custom GPT-2 Visualization (5 Hidden Layers)")
+ax.axis("off")
 
-# Save the plot
-output_path = "static/graph.png"
-fig.savefig(output_path, format="png", bbox_inches="tight")
-print(f"Graph saved to {output_path}")
+# Save the figure
+save_path = "static/graph.png"
+fig.savefig(save_path, format="png", bbox_inches="tight")
+print(f"Graph saved to {save_path}")
 plt.close(fig)
