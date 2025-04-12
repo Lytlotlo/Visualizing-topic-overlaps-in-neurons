@@ -1,1 +1,3 @@
-# Visualizing-topic-overlaps-in-neurons part 1
+# Visualizing topic overlaps in neurons: A mechanistic Interpretability approach
+
+Understanding how neural networks process and represent information is vital for improving their interpretability and reliability. This project investigates the concept of visualizing topic overlaps and neuron cooperation across layers in a neural network. By assigning topics such as Health, Technology, and Mixed to individual neurons and analyzing their activations, we uncover patterns of topic propagation and overlap. The resulting visualization offers a novel perspective on how neural networks encode and generalize information, providing a practical tool for understanding their internal behavior. These insights can help inform future studies on interpretability and the development of more transparent AI systems.
